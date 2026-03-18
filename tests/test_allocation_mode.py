@@ -1,12 +1,12 @@
 import pytest
 
-from areal.api import AllocationMode
 from areal.api.alloc_mode import (
     AllocationValidationError,
     InvalidAllocationModeError,
     ModelAllocation,
+    _AllocationMode,
 )
-from areal.api.cli_args import SchedulingStrategyType
+from areal.api.cli_args import SchedulingStrategy, SchedulingStrategyType
 
 # Test cases: dict with input string and expected properties
 TEST_CASES = [
@@ -263,7 +263,7 @@ VALIDATION_ERROR_CASES = [
 @pytest.mark.parametrize("test_case", TEST_CASES, ids=lambda tc: tc["id"])
 def test_allocation_parsing(test_case):
     """Test allocation mode parsing with various configurations."""
-    mode = AllocationMode.from_str(test_case["input"])
+    mode = _AllocationMode.from_str(test_case["input"])
 
     # Check number of allocations
     assert len(mode.allocations) == test_case["num_allocs"]
@@ -322,13 +322,13 @@ def test_allocation_parsing(test_case):
 def test_validation_errors(test_case):
     """Test that validation errors are raised correctly."""
     with pytest.raises(test_case["error"], match=test_case["match"]):
-        AllocationMode.from_str(test_case["input"])
+        _AllocationMode.from_str(test_case["input"])
 
 
 def test_backward_compatible_properties():
     """Test backward-compatible properties work correctly."""
     # Unambiguous case
-    mode = AllocationMode.from_str("sglang:d2+fsdp:d4")
+    mode = _AllocationMode.from_str("sglang:d2+fsdp:d4")
     assert mode.gen.dp_size == 2
     assert mode.train.dp_size == 4
     assert mode.gen_backend == "sglang"
@@ -336,19 +336,19 @@ def test_backward_compatible_properties():
     assert mode.gen_instance_size == 1
 
     # Ambiguous gen property
-    mode = AllocationMode.from_str("sglang[r1]:d2+sglang[r2]:d2+fsdp[actor]:d4")
+    mode = _AllocationMode.from_str("sglang[r1]:d2+sglang[r2]:d2+fsdp[actor]:d4")
     with pytest.raises(AttributeError, match="Ambiguous"):
         _ = mode.gen
 
     # Ambiguous train property
-    mode = AllocationMode.from_str("sglang[rollout]:d2+fsdp[actor]:d4+fsdp[critic]:d4")
+    mode = _AllocationMode.from_str("sglang[rollout]:d2+fsdp[actor]:d4+fsdp[critic]:d4")
     with pytest.raises(AttributeError, match="Ambiguous"):
         _ = mode.train
 
 
 def test_getitem_access():
     """Test __getitem__ access by name."""
-    mode = AllocationMode.from_str("sglang[rollout]:d2+fsdp[actor]:d4")
+    mode = _AllocationMode.from_str("sglang[rollout]:d2+fsdp[actor]:d4")
     rollout = mode["rollout"]
     assert isinstance(rollout, ModelAllocation)
     assert rollout.backend == "sglang"
@@ -362,7 +362,7 @@ def test_getitem_access():
 def test_operator_precedence():
     """Test that | binds tighter than +."""
     # a + b|c should parse as a + (b|c), not (a+b)|c
-    mode = AllocationMode.from_str("sglang[rollout]:d2+fsdp[actor]:d4|fsdp[critic]:d4")
+    mode = _AllocationMode.from_str("sglang[rollout]:d2+fsdp[actor]:d4|fsdp[critic]:d4")
     assert len(mode.allocations) == 3
     # rollout is separate
     assert (
@@ -379,3 +379,279 @@ def test_operator_precedence():
         == SchedulingStrategyType.colocation.value
     )
     assert mode["critic"].scheduling_strategy.target == "actor"
+
+
+class TestModelAllocationFromStr:
+    """Tests for ModelAllocation.from_str() single-component parser."""
+
+    def test_fsdp_simple(self):
+        """Test parsing simple FSDP allocation."""
+        alloc = ModelAllocation.from_str("fsdp:d4")
+        assert alloc.backend == "fsdp"
+        assert alloc.parallel.data_parallel_size == 4
+        assert alloc.parallel.tensor_parallel_size == 1
+
+    def test_sglang_with_tp(self):
+        """Test parsing SGLang allocation with tensor parallelism."""
+        alloc = ModelAllocation.from_str("sglang:d4t2")
+        assert alloc.backend == "sglang"
+        assert alloc.parallel.data_parallel_size == 4
+        assert alloc.parallel.tensor_parallel_size == 2
+
+    def test_vllm_with_pp(self):
+        """Test parsing vLLM allocation with pipeline parallelism."""
+        alloc = ModelAllocation.from_str("vllm:d2t4p2")
+        assert alloc.backend == "vllm"
+        assert alloc.parallel.data_parallel_size == 2
+        assert alloc.parallel.tensor_parallel_size == 4
+        assert alloc.parallel.pipeline_parallel_size == 2
+
+    def test_megatron_full(self):
+        """Test parsing Megatron allocation with all dimensions."""
+        alloc = ModelAllocation.from_str("megatron:d4t2p2")
+        assert alloc.backend == "megatron"
+        assert alloc.parallel.data_parallel_size == 4
+        assert alloc.parallel.tensor_parallel_size == 2
+        assert alloc.parallel.pipeline_parallel_size == 2
+
+    def test_archon_simple(self):
+        """Test parsing Archon allocation."""
+        alloc = ModelAllocation.from_str("archon:d2")
+        assert alloc.backend == "archon"
+        assert alloc.parallel.data_parallel_size == 2
+
+    def test_auto_backend_fsdp(self):
+        """Test auto-selecting fsdp backend for simple parallelism."""
+        alloc = ModelAllocation.from_str("d4")
+        assert alloc.backend == "fsdp"
+        assert alloc.parallel.data_parallel_size == 4
+
+    def test_auto_backend_megatron_pp(self):
+        """Test auto-selecting megatron backend when pipeline parallelism > 1."""
+        alloc = ModelAllocation.from_str("d4p2")
+        assert alloc.backend == "megatron"
+        assert alloc.parallel.data_parallel_size == 4
+        assert alloc.parallel.pipeline_parallel_size == 2
+
+    def test_auto_backend_megatron_ep(self):
+        """Test auto-selecting megatron backend when expert parallelism > 1."""
+        alloc = ModelAllocation.from_str("d4e2")
+        assert alloc.backend == "megatron"
+        assert alloc.parallel.data_parallel_size == 4
+        assert alloc.parallel.expert_parallel_size == 2
+
+    def test_hybrid_moe(self):
+        """Test parsing hybrid MoE allocation with attn/ffn split."""
+        alloc = ModelAllocation.from_str("megatron:(attn:d1p12t4|ffn:d1p12e4)")
+        assert alloc.backend == "megatron"
+        assert alloc.parallel.tensor_parallel_size == 4
+        assert alloc.parallel.pipeline_parallel_size == 12
+        assert alloc.parallel.expert_parallel_size == 4
+
+    def test_with_name(self):
+        """Test overriding name parameter."""
+        alloc = ModelAllocation.from_str("fsdp:d4", name="actor")
+        assert alloc.name == "actor"
+        assert alloc.backend == "fsdp"
+
+    def test_with_scheduling_strategy(self):
+        """Test overriding scheduling strategy parameter."""
+        sched = SchedulingStrategy(
+            type=SchedulingStrategyType.colocation.value, target="actor"
+        )
+        alloc = ModelAllocation.from_str("fsdp:d4", scheduling_strategy=sched)
+        assert alloc.scheduling_strategy.type == "colocation"
+        assert alloc.scheduling_strategy.target == "actor"
+
+    def test_default_scheduling_is_separation(self):
+        """Test that default scheduling strategy is separation."""
+        alloc = ModelAllocation.from_str("fsdp:d4")
+        assert alloc.scheduling_strategy.type == "separation"
+
+    def test_rejects_multi_component(self):
+        """Test that multi-component strings with '+' are rejected."""
+        with pytest.raises(ValueError, match="single.*component"):
+            ModelAllocation.from_str("sglang:d4+fsdp:d4")
+
+    def test_rejects_empty_string(self):
+        """Test that empty string raises an error."""
+        with pytest.raises((ValueError, Exception)):
+            ModelAllocation.from_str("")
+
+    def test_world_size(self):
+        """Test world_size computation from parallel dimensions."""
+        alloc = ModelAllocation.from_str("fsdp:d4t2")
+        assert alloc.parallel.world_size == 8  # 4*2*1*1
+
+    def test_fsdp_rejects_pp(self):
+        """Test that FSDP rejects pipeline parallelism."""
+        with pytest.raises(AllocationValidationError):
+            ModelAllocation.from_str("fsdp:d4p2")
+
+    def test_context_parallel(self):
+        """Test parsing context parallelism dimension."""
+        alloc = ModelAllocation.from_str("fsdp:d4c2")
+        assert alloc.parallel.context_parallel_size == 2
+
+    def test_single_gpu(self):
+        """Test single-GPU allocation."""
+        alloc = ModelAllocation.from_str("fsdp:d1")
+        assert alloc.parallel.world_size == 1
+
+    def test_sglang_d1(self):
+        """Test single-GPU SGLang allocation."""
+        alloc = ModelAllocation.from_str("sglang:d1")
+        assert alloc.backend == "sglang"
+        assert alloc.parallel.world_size == 1
+
+    @pytest.mark.parametrize(
+        "spec",
+        [
+            "fsdp:d4",
+            "sglang:d4t2",
+            "vllm:d2t4p2",
+            "megatron:d4p2t1",
+            "archon:d2",
+            "fsdp:d1",
+            "sglang:d1",
+            "megatron:d2t4p2c2",
+            "fsdp:d8c2",
+            "megatron:d4e2",
+        ],
+    )
+    def test_roundtrip_serialization(self, spec):
+        """Test that from_str(to_str()) produces equivalent allocation."""
+        alloc1 = ModelAllocation.from_str(spec)
+        serialized = alloc1.to_str()
+        alloc2 = ModelAllocation.from_str(serialized)
+        assert alloc1.backend == alloc2.backend
+        assert alloc1.parallel.data_parallel_size == alloc2.parallel.data_parallel_size
+        assert (
+            alloc1.parallel.tensor_parallel_size == alloc2.parallel.tensor_parallel_size
+        )
+        assert (
+            alloc1.parallel.pipeline_parallel_size
+            == alloc2.parallel.pipeline_parallel_size
+        )
+        assert (
+            alloc1.parallel.context_parallel_size
+            == alloc2.parallel.context_parallel_size
+        )
+        assert (
+            alloc1.parallel.expert_parallel_size == alloc2.parallel.expert_parallel_size
+        )
+
+    def test_to_str_raises_for_hybrid_moe(self):
+        """Test that to_str() raises for hybrid MoE allocations with etp != 1."""
+        alloc = ModelAllocation.from_str("megatron:(attn:d4p2t2c2|ffn:d2p2t4e2)")
+        assert alloc.parallel.expert_tensor_parallel_size != 1
+        with pytest.raises(NotImplementedError, match="hybrid MoE"):
+            alloc.to_str()
+
+
+class TestTrainEngineConfigBackendNormalization:
+    """Tests for TrainEngineConfig.__post_init__ backend normalization."""
+
+    def test_explicit_fsdp_preserved(self):
+        """Test that explicit fsdp backend is preserved."""
+        from areal.api.cli_args import TrainEngineConfig
+
+        config = TrainEngineConfig(backend="fsdp:d4")
+        assert config.backend == "fsdp:d4"
+
+    def test_auto_selected_megatron_pp_preserved(self):
+        """Test auto-selecting megatron backend when pipeline parallelism > 1."""
+        from areal.api.cli_args import TrainEngineConfig
+
+        config = TrainEngineConfig(backend="d4p2")
+        assert config.backend == "megatron:d4p2"
+
+    def test_auto_selected_megatron_ep_preserved(self):
+        """Test auto-selecting megatron backend when expert parallelism > 1."""
+        from areal.api.cli_args import TrainEngineConfig
+
+        config = TrainEngineConfig(backend="d4e2")
+        assert config.backend == "megatron:d4e2"
+
+    def test_explicit_megatron_preserved(self):
+        """Test that explicit megatron backend is preserved."""
+        from areal.api.cli_args import TrainEngineConfig
+
+        config = TrainEngineConfig(backend="megatron:d4t2p2")
+        # to_str() canonicalizes dimension order: d, p, t, c, e
+        assert config.backend == "megatron:d4p2t2"
+
+    def test_explicit_archon_preserved(self):
+        """Test that explicit archon backend is preserved."""
+        from areal.api.cli_args import TrainEngineConfig
+
+        config = TrainEngineConfig(backend="archon:d2")
+        assert config.backend == "archon:d2"
+
+    def test_rejects_inference_backend(self):
+        """Test that inference backends are rejected for TrainEngineConfig."""
+        from areal.api.cli_args import TrainEngineConfig
+
+        with pytest.raises(ValueError, match="training backend"):
+            TrainEngineConfig(backend="sglang:d4")
+
+    def test_rejects_vllm_backend(self):
+        """Test that vllm backend is rejected for TrainEngineConfig."""
+        from areal.api.cli_args import TrainEngineConfig
+
+        with pytest.raises(ValueError, match="training backend"):
+            TrainEngineConfig(backend="vllm:d4")
+
+    def test_hybrid_moe_preserved(self):
+        """Test that hybrid MoE backend spec is preserved without crashing."""
+        from areal.api.cli_args import TrainEngineConfig
+
+        spec = "megatron:(attn:d1p12t4|ffn:d1p12e4)"
+        config = TrainEngineConfig(backend=spec)
+        assert "megatron" in config.backend
+
+    def test_single_gpu_default(self):
+        """Test single-GPU fsdp:d1 backend is correctly normalized."""
+        from areal.api.cli_args import TrainEngineConfig
+
+        config = TrainEngineConfig(backend="fsdp:d1")
+        assert config.backend == "fsdp:d1"
+
+
+class TestInferenceEngineConfigBackendNormalization:
+    """Tests for InferenceEngineConfig.__post_init__ backend normalization."""
+
+    def test_explicit_sglang_preserved(self):
+        """Test that explicit sglang backend is preserved."""
+        from areal.api.cli_args import InferenceEngineConfig
+
+        config = InferenceEngineConfig(backend="sglang:d4t2")
+        assert config.backend == "sglang:d4t2"
+
+    def test_explicit_vllm_preserved(self):
+        """Test that explicit vllm backend is preserved."""
+        from areal.api.cli_args import InferenceEngineConfig
+
+        config = InferenceEngineConfig(backend="vllm:d2t4")
+        assert config.backend == "vllm:d2t4"
+
+    def test_rejects_training_backend(self):
+        """Test that training backends are rejected for InferenceEngineConfig."""
+        from areal.api.cli_args import InferenceEngineConfig
+
+        with pytest.raises(ValueError, match="inference backend"):
+            InferenceEngineConfig(backend="fsdp:d4")
+
+    def test_rejects_megatron_backend(self):
+        """Test that megatron backend is rejected for InferenceEngineConfig."""
+        from areal.api.cli_args import InferenceEngineConfig
+
+        with pytest.raises(ValueError, match="inference backend"):
+            InferenceEngineConfig(backend="megatron:d4")
+
+    def test_single_gpu_default(self):
+        """Test single-GPU sglang:d1 backend is correctly normalized."""
+        from areal.api.cli_args import InferenceEngineConfig
+
+        config = InferenceEngineConfig(backend="sglang:d1")
+        assert config.backend == "sglang:d1"

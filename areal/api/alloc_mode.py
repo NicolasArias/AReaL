@@ -266,7 +266,7 @@ class ModelAllocation:
 
     backend: Literal["fsdp", "megatron", "archon", "vllm", "sglang"]
     name: str | None
-    parallel: ParallelStrategy | None
+    parallel: ParallelStrategy
     scheduling_strategy: SchedulingStrategy
     _backend_explicit: bool = field(default=True, repr=False)
 
@@ -295,6 +295,106 @@ class ModelAllocation:
                     f"FSDP backend only supports data/tensor/context parallelism. "
                     f"Got strategy: {self.parallel}"
                 )
+
+    @classmethod
+    def from_str(
+        cls,
+        spec: str,
+        name: str | None = None,
+        scheduling_strategy: SchedulingStrategy | None = None,
+    ) -> "ModelAllocation":
+        """Parse a single backend:parallelism string into a ModelAllocation.
+
+        Parameters
+        ----------
+        spec : str
+            Single component spec like ``"fsdp:d4"``, ``"sglang:d4t2"``,
+            ``"megatron:(attn:d1p12t4|ffn:d1p12e4)"``, or ``"d4"`` (auto-backend).
+        name : str, optional
+            Role name (e.g., ``"actor"``, ``"rollout"``).
+        scheduling_strategy : SchedulingStrategy, optional
+            Scheduling strategy. Defaults to separation.
+
+        Returns
+        -------
+        ModelAllocation
+
+        Raises
+        ------
+        ValueError
+            If *spec* contains ``'+'`` (multi-component strings are not allowed).
+        """
+        if "+" in spec:
+            raise ValueError(
+                "ModelAllocation.from_str() accepts a single component spec. "
+                "Multi-component strings containing '+' are not allowed. "
+                "Use _AllocationMode.from_str() for multi-component allocation strings."
+            )
+
+        parser = _LLMParallelParser()
+        result = parser.parse(spec)
+
+        # Extract the single ModelAllocation from the parse result
+        if isinstance(result, list):
+            if len(result) != 1:
+                raise ValueError(
+                    f"Expected a single allocation from spec '{spec}', "
+                    f"got {len(result)} allocations."
+                )
+            alloc = result[0]
+        elif isinstance(result, ModelAllocation):
+            alloc = result
+        else:
+            raise ValueError(f"Unexpected parse result type: {type(result)}")
+
+        # Override name if provided
+        if name is not None:
+            alloc.name = name
+
+        # Override scheduling_strategy if provided, otherwise default to separation
+        if scheduling_strategy is not None:
+            alloc.scheduling_strategy = scheduling_strategy
+        else:
+            alloc.scheduling_strategy = SchedulingStrategy(
+                type=SchedulingStrategyType.separation, target=None
+            )
+
+        return alloc
+
+    def to_str(self) -> str:
+        """Serialize to a canonical ``backend:dims`` string (always includes backend).
+
+        The output is round-trippable: ``ModelAllocation.from_str(alloc.to_str())``
+        reproduces an equivalent allocation for standard (non-hybrid-MoE) configs.
+
+        Raises
+        ------
+        NotImplementedError
+            If the allocation has ``expert_tensor_parallel_size != 1``
+            (hybrid MoE), which cannot be represented in the simple
+            ``backend:dims`` format.
+        """
+        if self.parallel.expert_tensor_parallel_size != 1:
+            raise NotImplementedError(
+                f"to_str() does not support hybrid MoE allocations with "
+                f"expert_tensor_parallel_size={self.parallel.expert_tensor_parallel_size}. "
+                f"Use the full allocation string syntax instead "
+                f"(e.g., 'megatron:(attn:d1p12t4|ffn:d1p12e4)')."
+            )
+        dims = []
+        if self.parallel.data_parallel_size != 1:
+            dims.append(f"d{self.parallel.data_parallel_size}")
+        if self.parallel.pipeline_parallel_size != 1:
+            dims.append(f"p{self.parallel.pipeline_parallel_size}")
+        if self.parallel.tensor_parallel_size != 1:
+            dims.append(f"t{self.parallel.tensor_parallel_size}")
+        if self.parallel.context_parallel_size != 1:
+            dims.append(f"c{self.parallel.context_parallel_size}")
+        if self.parallel.expert_parallel_size != 1:
+            dims.append(f"e{self.parallel.expert_parallel_size}")
+        if not dims:
+            dims.append(f"d{self.parallel.data_parallel_size}")
+        return f"{self.backend}:{''.join(dims)}"
 
     @property
     def world_size(self):
@@ -330,11 +430,13 @@ class ModelAllocation:
 
 
 @dataclass
-class AllocationMode:
-    """Resource allocation configuration for distributed ML workloads.
+class _AllocationMode:
+    """DEPRECATED — Legacy resource allocation configuration for SPMD launchers only.
 
-    Manages allocation of GPUs across multiple models/components with support for
-    named components, colocation, and flexible parallelization strategies.
+    Use :class:`ModelAllocation` with per-engine ``backend`` fields instead.
+
+    This class is retained only for backward compatibility with SPMD launchers
+    (local, ray, slurm) and will be removed in a future version.
 
     Parameters
     ----------
@@ -353,27 +455,27 @@ class AllocationMode:
     --------
     Training-only (backward compatible):
 
-    >>> mode = AllocationMode.from_str("d4t2p1")
+    >>> mode = _AllocationMode.from_str("d4t2p1")
 
     Two named components:
 
-    >>> mode = AllocationMode.from_str("sglang[rollout]:d2+fsdp[actor]:d4")
+    >>> mode = _AllocationMode.from_str("sglang[rollout]:d2+fsdp[actor]:d4")
     >>> rollout = mode["rollout"]
 
     Three components (names required):
 
-    >>> mode = AllocationMode.from_str("sglang[r]:d2+fsdp[a]:d4+fsdp[c]:d4")
+    >>> mode = _AllocationMode.from_str("sglang[r]:d2+fsdp[a]:d4+fsdp[c]:d4")
 
     Colocation (actor and critic share 4 GPUs):
 
-    >>> mode = AllocationMode.from_str("sglang[r]:d2+fsdp[a]:d4|fsdp[c]:d4")
+    >>> mode = _AllocationMode.from_str("sglang[r]:d2+fsdp[a]:d4|fsdp[c]:d4")
     """
 
     allocations: list[ModelAllocation] = field(default_factory=list)
 
     @classmethod
     def from_str(cls, allocation_mode: str):
-        """Parse allocation mode string into AllocationMode object.
+        """Parse allocation mode string into _AllocationMode object.
 
         Parameters
         ----------
@@ -382,7 +484,7 @@ class AllocationMode:
 
         Returns
         -------
-        AllocationMode
+        _AllocationMode
             Parsed allocation configuration
 
         Raises
@@ -404,23 +506,23 @@ class AllocationMode:
         --------
         Training-only (backward compatible):
 
-        >>> AllocationMode.from_str("d2p2t1")
+        >>> _AllocationMode.from_str("d2p2t1")
 
         Two components, no names:
 
-        >>> AllocationMode.from_str("sglang:d4t2+fsdp:d8")
+        >>> _AllocationMode.from_str("sglang:d4t2+fsdp:d8")
 
         Two named components:
 
-        >>> AllocationMode.from_str("sglang[rollout]:d2+fsdp[actor]:d4")
+        >>> _AllocationMode.from_str("sglang[rollout]:d2+fsdp[actor]:d4")
 
         Three+ components (names required):
 
-        >>> AllocationMode.from_str("sglang[r]:d2+fsdp[a]:d4+fsdp[c]:d4")
+        >>> _AllocationMode.from_str("sglang[r]:d2+fsdp[a]:d4+fsdp[c]:d4")
 
         Colocation (r separated, a|c share GPUs):
 
-        >>> AllocationMode.from_str("sglang[r]:d2+fsdp[a]:d4|fsdp[c]:d4")
+        >>> _AllocationMode.from_str("sglang[r]:d2+fsdp[a]:d4|fsdp[c]:d4")
         """
         parser = _LLMParallelParser()
         result = parser.parse(allocation_mode)
@@ -447,10 +549,12 @@ class AllocationMode:
             a for a in self.allocations if a.backend in ("fsdp", "megatron", "archon")
         ]
 
-    ########### Legacy Attributes for Backward Compatiblity ###########
+    ########### Legacy Attributes for Backward Compatibility ###########
+    # DEPRECATED: AllocationMode and these properties are legacy. Use ModelAllocation directly.
+    # These properties are only retained for SPMD launcher compatibility and will be removed.
     @property
     def type_(self) -> AllocationType:
-        """Backward compatible: Infer allocation type from allocations."""
+        """DEPRECATED: Infer allocation type from allocations. Use ModelAllocation directly."""
         if len(self.allocations) not in [1, 2]:
             raise AttributeError(
                 "Can only infer allocation type from 1 or 2 allocations."
@@ -1168,22 +1272,43 @@ Hints:
             raise ValueError(f"Parsing error: {e}\n{err_hint}")
 
     def _convert_to_allocation_mode(self, result):
-        """Convert parsed result to AllocationMode object.
+        """Convert parsed result to _AllocationMode object.
 
         Args:
             result: Parsed result (list of ModelAllocation)
 
         Returns:
-            AllocationMode: Converted allocation mode configuration
+            _AllocationMode: Converted allocation mode configuration
 
         Raises:
             ValueError: When expression type is not recognized
         """
         if isinstance(result, list):
             # Main case: list of ModelAllocation objects
-            return AllocationMode(allocations=result)
+            return _AllocationMode(allocations=result)
         elif isinstance(result, ModelAllocation):
             # Single allocation
-            return AllocationMode(allocations=[result])
+            return _AllocationMode(allocations=[result])
         else:
             raise ValueError(f"Unknown result type: {type(result)}")
+
+
+# ---------------------------------------------------------------------------
+# ``AllocationMode`` is removed.  Use :class:`ModelAllocation` with per-engine
+# ``backend`` fields instead.  The internal ``_AllocationMode`` class is
+# retained only for backward-compatible SPMD launcher parsing.
+# ---------------------------------------------------------------------------
+
+# Provide a clear error if someone still tries to import the old name.
+# This avoids silent breakage.
+
+
+def __getattr__(name):
+    if name == "AllocationMode":
+        raise ImportError(
+            "AllocationMode has been removed. Use ModelAllocation with per-engine "
+            "'backend' fields instead (e.g., actor.backend='fsdp:d4', "
+            "rollout.backend='sglang:d4'). "
+            "See docs/en/reference/alloc_mode.md for migration details."
+        )
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -5,7 +5,8 @@ import torch
 import torch.distributed as dist
 
 from areal import current_platform
-from areal.api import AllocationMode, FinetuneSpec, StepInfo
+from areal.api import FinetuneSpec, StepInfo
+from areal.api.alloc_mode import ModelAllocation
 from areal.api.cli_args import RWConfig, load_expr_config
 from areal.dataset import get_custom_dataset
 from areal.engine import FSDPRWEngine
@@ -50,8 +51,8 @@ def main(args):
     rank = int(os.getenv("RANK"))
 
     seeding.set_random_seed(config.seed, f"trainer{rank}")
-    allocation_mode = AllocationMode.from_str(config.allocation_mode)
-    parallel_strategy = allocation_mode.train
+    actor_alloc = ModelAllocation.from_str(config.actor.backend)
+    parallel_strategy = actor_alloc.parallel
 
     engine = FSDPRWEngine(config=config.actor)
     engine.create_process_group(parallel_strategy=parallel_strategy)

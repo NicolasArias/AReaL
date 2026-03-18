@@ -8,7 +8,7 @@ OOM 错误在大规模 RL 训练中很常见。本指南介绍如何在 AReaL �
 
 ### 核心参数
 
-- **`allocation_mode`**：推理和训练如何在 GPU 之间分配。对于大模型，张量并行通常比数据并行每个 GPU 使用更少的内存。
+- **各引擎的 `backend` 字段（如 `actor.backend`、`rollout.backend`）**：推理和训练如何在 GPU 之间分配。对于大模型，张量并行通常比数据并行每个 GPU 使用更少的内存。
 
 - **`train_dataset.max_length`**：最大提示长度。更长的提示需要更多内存。
 
@@ -48,9 +48,12 @@ max_concurrent_rollouts: 200  # Try reducing from default values like 256
 增加张量并行以将模型权重分配到更多 GPU：
 
 ```yaml
-# Before: sglang:d4+fsdp:d4 (4 data parallel processes)
-# After: sglang:d2t2+fsdp:d4 (2 data parallel, 2 tensor parallel)
-allocation_mode: sglang:d2t2+fsdp:d4
+# Before: 4 data parallel processes for rollout
+# After: 2 data parallel, 2 tensor parallel for rollout
+rollout:
+  backend: "sglang:d2t2"
+actor:
+  backend: "fsdp:d4"
 ```
 
 请注意，较高的张量并行会降低生成吞吐量。
@@ -100,9 +103,12 @@ actor:
 对于无法进一步降低 `max_tokens_per_mb` 的长上下文场景，使用 Ulysses 序列并行将序列分配到多个 GPU：
 
 ```yaml
-# Before: sglang:d4+fsdp:d4 (4 data parallel processes)
-# After: sglang:d4+fsdp:d2c2 (2 data parallel, 2 ulysses context parallel)
-allocation_mode: sglang:d4+fsdp:d2c2
+# Before: 4 data parallel processes for training
+# After: 2 data parallel, 2 ulysses context parallel for training
+rollout:
+  backend: "sglang:d4"
+actor:
+  backend: "fsdp:d2c2"
 ```
 
 > Ulysses 上下文并行大小必须能整除模型的注意力头数量。
@@ -115,17 +121,23 @@ allocation_mode: sglang:d4+fsdp:d2c2
 您也可以使用 FSDP 启用张量并行：
 
 ```yaml
-# Before: sglang:d4+fsdp:d4 (4 data parallel processes)
-# After: sglang:d4+fsdp:d2t2 (2 data parallel, 2 tensor parallel)
-allocation_mode: sglang:d4+fsdp:d2t2
+# Before: 4 data parallel processes for training
+# After: 2 data parallel, 2 tensor parallel for training
+rollout:
+  backend: "sglang:d4"
+actor:
+  backend: "fsdp:d2t2"
 ```
 
 对于 Megatron 和 Archon 后端，您还可以启用流水线和专家并行：
 
 ```yaml
-# Before: sglang:d4+fsdp:d4 (4 data parallel processes)
-# After: sglang:d4+archon:d2p2e2 (2 data parallel with 2 overlaid expert parallel, 2 pipeline parallel, still 4 GPUs)
-allocation_mode: sglang:d4+archon:d2p2e2
+# Before: 4 data parallel processes for training
+# After: 2 data parallel with 2 overlaid expert parallel, 2 pipeline parallel, still 4 GPUs
+rollout:
+  backend: "sglang:d4"
+actor:
+  backend: "archon:d2p2e2"
 ```
 
 我们推荐使用流水线和专家并行而不是张量/上下文并行。查看[分配模式参考文档](../reference/alloc_mode.md)了解更多详情。

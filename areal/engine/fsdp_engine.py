@@ -1091,10 +1091,11 @@ class FSDPEngine(TrainEngine):
         # which blocks creating another TCP store for weight update.
         os.environ["TORCHELASTIC_USE_AGENT_STORE"] = str(False)
         if dist.get_rank() == 0:
-            assert meta.alloc_mode is not None
+            assert meta.gen_allocation is not None
 
             fut = self.rollout_engine.init_weights_update_group(meta)
 
+            gen_world_size = meta.gen_allocation.parallel.world_size
             self.logger.info(
                 f"Initializing weight update group: type={meta.type} "
                 f"init_method=tcp://{meta.nccl_master_address}:{meta.nccl_master_port} "
@@ -1102,7 +1103,7 @@ class FSDPEngine(TrainEngine):
             )
             self.weight_update_group = init_custom_process_group(
                 backend=current_platform.communication_backend,
-                world_size=meta.alloc_mode.gen.world_size + 1,
+                world_size=gen_world_size + 1,
                 init_method=f"tcp://{meta.nccl_master_address}:{meta.nccl_master_port}",
                 rank=0,
                 group_name=meta.nccl_group_name,

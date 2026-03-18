@@ -15,12 +15,12 @@ cluster:
     type: nfs
     nfs_record_root: /tmp/areal/name_resolve
 
-allocation_mode: sglang:d1 + fsdp:d1
 
 scheduler:
   type: local
 
 rollout:
+  backend: "sglang:d1"
   experiment_name: ${experiment_name}
   trial_name: ${trial_name}
   max_concurrent_rollouts: 256
@@ -48,6 +48,7 @@ gconfig:
   temperature: 1.0
 
 actor:
+  backend: "fsdp:d1"
   experiment_name: ${experiment_name}
   trial_name: ${trial_name}
   path: Qwen/Qwen2.5-1.5B-Instruct

@@ -1027,6 +1027,14 @@ class TrainEngineConfig:
             "Currently only used by the TrainController."
         },
     )
+    # Backend and parallelism (new per-engine config)
+    backend: str = field(
+        default=MISSING,
+        metadata={
+            "help": "Backend and parallelism strategy, e.g. 'fsdp:d4', 'megatron:d4t2p2', "
+            "'archon:d2', or 'd4' (auto-selects backend). Required."
+        },
+    )
     scheduling_strategy: SchedulingStrategy = field(
         default_factory=SchedulingStrategy,
         metadata={
@@ -1050,6 +1058,44 @@ class TrainEngineConfig:
                 "memory_efficient_load is for loading pretrained weights on CPU, "
                 "but init_from_scratch creates a model without loading any weights."
             )
+        # Normalize backend: parse, auto-select engine name if needed, and
+        # canonicalize via to_str().  ``backend`` is required (default=MISSING).
+        if self.backend == MISSING:
+            raise ValueError(
+                "TrainEngineConfig.backend is required. "
+                "Specify a backend string, e.g. 'fsdp:d4', 'megatron:d4t2p2', "
+                "'archon:d2', or 'd4' (auto-selects backend)."
+            )
+        original_backend = self.backend
+        from areal.api.alloc_mode import ModelAllocation
+
+        alloc = ModelAllocation.from_str(self.backend)
+        if not alloc._backend_explicit:
+            # Only default to fsdp when parser didn't auto-select megatron for pp/ep
+            if (
+                alloc.parallel.pipeline_parallel_size <= 1
+                and alloc.parallel.expert_parallel_size <= 1
+            ):
+                alloc.backend = "fsdp"
+
+        # Validate that the resolved backend is a training backend.
+        _TRAIN_BACKENDS = {"fsdp", "megatron", "archon"}
+        if alloc.backend not in _TRAIN_BACKENDS:
+            raise ValueError(
+                f"TrainEngineConfig.backend must use a training backend "
+                f"({', '.join(sorted(_TRAIN_BACKENDS))}), got '{alloc.backend}' "
+                f"from spec '{self.backend}'"
+            )
+
+        try:
+            self.backend = alloc.to_str()
+        except NotImplementedError:
+            # Hybrid MoE specs (etp != 1) cannot be round-tripped via to_str();
+            # preserve the original user-supplied string instead.
+            if alloc._backend_explicit:
+                self.backend = original_backend
+            else:
+                self.backend = f"{alloc.backend}:{original_backend}"
 
 
 @dataclass
@@ -1728,10 +1774,17 @@ class InferenceEngineConfig:
             "Currently only used by the RolloutController."
         },
     )
+    # Backend and parallelism (new per-engine config)
+    backend: str = field(
+        default=MISSING,
+        metadata={
+            "help": "Backend and parallelism strategy, e.g. 'sglang:d4', 'vllm:d2t4'. Required."
+        },
+    )
     scheduling_strategy: SchedulingStrategy = field(
         default_factory=SchedulingStrategy,
         metadata={
-            "help": "The scheduling strategy of this TrainEngine, either separation or colocation. "
+            "help": "The scheduling strategy of this InferenceEngine, either separation or colocation. "
             "Currently only used by the RolloutController."
         },
     )
@@ -1759,6 +1812,42 @@ class InferenceEngineConfig:
                 f"scheduling_spec must contain 1 or 2 SchedulingSpec, "
                 f"got {len(self.scheduling_spec)}"
             )
+        # Normalize backend: parse, auto-select engine name if needed, and
+        # canonicalize via to_str().  ``backend`` is required (default=MISSING).
+        if self.backend == MISSING:
+            raise ValueError(
+                "InferenceEngineConfig.backend is required. "
+                "Specify a backend string, e.g. 'sglang:d4', 'vllm:d2t4'."
+            )
+        original_backend = self.backend
+        from areal.api.alloc_mode import ModelAllocation
+
+        alloc = ModelAllocation.from_str(self.backend)
+        if not alloc._backend_explicit:
+            # Only default to sglang when parser didn't auto-select for pp/ep
+            if (
+                alloc.parallel.pipeline_parallel_size <= 1
+                and alloc.parallel.expert_parallel_size <= 1
+            ):
+                alloc.backend = "sglang"
+
+        # Validate that the resolved backend is an inference backend.
+        _INFERENCE_BACKENDS = {"sglang", "vllm"}
+        if alloc.backend not in _INFERENCE_BACKENDS:
+            raise ValueError(
+                f"InferenceEngineConfig.backend must use an inference backend "
+                f"({', '.join(sorted(_INFERENCE_BACKENDS))}), got '{alloc.backend}' "
+                f"from spec '{self.backend}'"
+            )
+
+        try:
+            self.backend = alloc.to_str()
+        except NotImplementedError:
+            # Hybrid MoE specs cannot be round-tripped; preserve original string.
+            if alloc._backend_explicit:
+                self.backend = original_backend
+            else:
+                self.backend = f"{alloc.backend}:{original_backend}"
 
 
 @dataclass
@@ -2121,7 +2210,11 @@ class BaseExperimentConfig:
     )
     allocation_mode: str = field(
         default="",
-        metadata={"help": "Pattern-based GPU parallel strategy allocation mode. "},
+        metadata={
+            "help": "DEPRECATED: Use per-engine 'backend' fields instead (e.g., actor.backend, rollout.backend). "
+            "Legacy pattern-based GPU parallel strategy allocation mode. "
+            "Only used by SPMD launchers (local/ray/slurm). Manual migration to per-engine 'backend' fields is required.",
+        },
     )
     seed: int = field(default=1, metadata={"help": "Random seed for reproducibility."})
     enable_offload: bool = field(
@@ -2194,10 +2287,6 @@ class RWConfig(BaseExperimentConfig):
 
 @dataclass
 class TeacherConfig(PPOActorConfig):
-    allocation_mode: str = field(
-        default="",
-        metadata={"help": "Pattern-based GPU parallel strategy allocation mode. "},
-    )
     rl_loss_weight: float = field(
         default=1.0,
         metadata={"help": "RL loss weight"},
@@ -2293,9 +2382,71 @@ def to_structured_cfg(cfg, config_cls):
     return cfg
 
 
+def _migrate_legacy_allocation_mode(cfg: DictConfig) -> None:
+    """Auto-populate per-engine ``backend`` fields from the legacy ``allocation_mode``.
+
+    This runs on the raw :class:`DictConfig` **before** ``OmegaConf.to_object()``
+    so that ``TrainEngineConfig.__post_init__`` / ``InferenceEngineConfig.__post_init__``
+    see a valid ``backend`` value instead of ``MISSING``.
+
+    Only populates fields that are currently ``MISSING``; explicitly set
+    per-engine backends always take precedence.
+    """
+    import warnings
+
+    alloc_mode_str = OmegaConf.select(cfg, "allocation_mode", default="")
+    if not alloc_mode_str:
+        return
+
+    from areal.api.alloc_mode import _AllocationMode
+
+    warnings.warn(
+        f"allocation_mode='{alloc_mode_str}' is deprecated. "
+        "Use per-engine 'backend' fields instead "
+        "(e.g., actor.backend='fsdp:d4', rollout.backend='sglang:d4'). "
+        "Auto-populating per-engine backends from allocation_mode.",
+        FutureWarning,
+        stacklevel=3,
+    )
+
+    alloc_mode = _AllocationMode.from_str(alloc_mode_str)
+
+    def _backend_str(alloc) -> str | None:
+        """Best-effort serialization of a ModelAllocation to a backend string."""
+        try:
+            return alloc.to_str()
+        except NotImplementedError:
+            # Hybrid MoE cannot be round-tripped; skip auto-populate.
+            return None
+
+    # --- Inference allocation → rollout.backend ---
+    inf_allocs = alloc_mode._get_inference_allocations()
+    if inf_allocs:
+        backend = _backend_str(inf_allocs[0])
+        if backend is not None:
+            try:
+                if OmegaConf.is_missing(cfg, "rollout.backend"):
+                    OmegaConf.update(cfg, "rollout.backend", backend)
+            except Exception:
+                pass  # rollout section may not exist in this config
+
+    # --- Training allocation → actor / critic / ref / teacher backends ---
+    train_allocs = alloc_mode._get_training_allocations()
+    if train_allocs:
+        backend = _backend_str(train_allocs[0])
+        if backend is not None:
+            for engine_field in ("actor", "critic", "ref", "teacher", "model"):
+                try:
+                    if OmegaConf.is_missing(cfg, f"{engine_field}.backend"):
+                        OmegaConf.update(cfg, f"{engine_field}.backend", backend)
+                except Exception:
+                    pass  # engine section may not exist in this config
+
+
 def load_expr_config(argv: list[str], config_cls: type[ConfigT]) -> tuple[ConfigT, str]:
     cfg, config_file = parse_cli_args(argv)
     cfg = to_structured_cfg(cfg, config_cls=config_cls)
+    _migrate_legacy_allocation_mode(cfg)
     cfg = OmegaConf.to_object(cfg)
     assert isinstance(cfg, config_cls)
 

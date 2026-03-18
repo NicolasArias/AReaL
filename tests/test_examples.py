@@ -154,7 +154,8 @@ def test_countdown_example(tmp_path_factory):
         run_example,
         example_file,
         config_name,
-        "allocation_mode=sglang:d1+fsdp:d1",
+        "rollout.backend=sglang:d1",
+        "actor.backend=fsdp:d1",
         "gconfig.n_samples=2",
         "gconfig.max_new_tokens=128",
         "actor.mb_spec.max_tokens_per_mb=1024",
@@ -174,16 +175,18 @@ def test_countdown_example(tmp_path_factory):
 # We have tests for vLLM in test_inference_engines.py,
 # so we can skip the integration test of vLLM here.
 @pytest.mark.parametrize(
-    "alloc_mode,single_controller",
+    "rollout_backend,actor_backend,single_controller",
     [
-        ("sglang:d1+megatron:d1", False),
-        ("sglang:d1+megatron:d1", True),
+        ("sglang:d1", "megatron:d1", False),
+        ("sglang:d1", "megatron:d1", True),
     ],
 )
 @pytest.mark.sglang
 @pytest.mark.multi_gpu
 @pytest.mark.ci
-def test_gsm8k_grpo(tmp_path_factory, alloc_mode, single_controller):
+def test_gsm8k_grpo(
+    tmp_path_factory, rollout_backend, actor_backend, single_controller
+):
     experiments_path = tmp_path_factory.mktemp("experiments")
     name_resolve_path = tmp_path_factory.mktemp("name_resolve")
     model_path = get_model_path(
@@ -195,7 +198,8 @@ def test_gsm8k_grpo(tmp_path_factory, alloc_mode, single_controller):
     config_name = "examples/math/gsm8k_grpo.yaml"
 
     additional_args = [
-        f"allocation_mode={alloc_mode}",
+        f"rollout.backend={rollout_backend}",
+        f"actor.backend={actor_backend}",
         "gconfig.n_samples=2",
         "gconfig.max_new_tokens=256",
         "actor.mb_spec.max_tokens_per_mb=1024",
@@ -223,7 +227,7 @@ def test_gsm8k_grpo(tmp_path_factory, alloc_mode, single_controller):
 
 
 @pytest.mark.parametrize(
-    "alloc_mode,single_controller",
+    "actor_backend,single_controller",
     [
         ("fsdp:d1", False),
         ("megatron:d1", False),
@@ -232,7 +236,7 @@ def test_gsm8k_grpo(tmp_path_factory, alloc_mode, single_controller):
 )
 @pytest.mark.gpu
 @pytest.mark.ci
-def test_gsm8k_sft(tmp_path_factory, alloc_mode, single_controller):
+def test_gsm8k_sft(tmp_path_factory, actor_backend, single_controller):
     experiments_path = tmp_path_factory.mktemp("experiments")
     name_resolve_path = tmp_path_factory.mktemp("name_resolve")
     model_path = get_model_path(
@@ -244,7 +248,7 @@ def test_gsm8k_sft(tmp_path_factory, alloc_mode, single_controller):
     config_name = "examples/math/gsm8k_sft.yaml"
 
     additional_args = [
-        f"allocation_mode={alloc_mode}",
+        f"actor.backend={actor_backend}",
         "actor.mb_spec.max_tokens_per_mb=1024",
         "train_dataset.batch_size=1",
         "valid_dataset.batch_size=1",
@@ -284,7 +288,7 @@ def test_gsm8k_eval(tmp_path_factory):
         run_example,
         example_file,
         config_name,
-        "allocation_mode=sglang:d1",
+        "rollout.backend=sglang:d1",
         "gconfig.n_samples=1",
         "gconfig.max_new_tokens=16",
         "valid_dataset.batch_size=16",
@@ -321,7 +325,8 @@ def test_vlm_grpo(tmp_path_factory):
         run_example,
         example_file,
         config_name,
-        "allocation_mode=sglang:d1+fsdp:d1",
+        "rollout.backend=sglang:d1",
+        "actor.backend=fsdp:d1",
         "gconfig.n_samples=2",
         "gconfig.max_new_tokens=256",
         "actor.mb_spec.max_tokens_per_mb=1024",
@@ -358,7 +363,7 @@ def test_vlm_sft(tmp_path_factory):
         run_example,
         example_file,
         config_name,
-        "allocation_mode=d1",
+        "actor.backend=d1",
         "actor.mb_spec.max_tokens_per_mb=1024",
         "train_dataset.batch_size=16",
         "valid_dataset.batch_size=16",
@@ -389,7 +394,8 @@ def test_gsm8k_ppo(tmp_path_factory):
         run_example,
         example_file,
         config_name,
-        "allocation_mode=sglang:d1+fsdp:d1",
+        "rollout.backend=sglang:d1",
+        "actor.backend=fsdp:d1",
         "gconfig.n_samples=2",
         "gconfig.max_new_tokens=256",
         "actor.mb_spec.max_tokens_per_mb=1024",
@@ -408,14 +414,14 @@ def test_gsm8k_ppo(tmp_path_factory):
 
 
 @pytest.mark.parametrize(
-    "alloc_mode",
+    "rollout_backend,actor_backend",
     [
-        pytest.param("sglang:d1+fsdp:d1", marks=pytest.mark.sglang),
-        pytest.param("vllm:d1+fsdp:d1", marks=pytest.mark.vllm),
+        pytest.param("sglang:d1", "fsdp:d1", marks=pytest.mark.sglang),
+        pytest.param("vllm:d1", "fsdp:d1", marks=pytest.mark.vllm),
     ],
 )
 @pytest.mark.multi_gpu
-def test_gsm8k_grpo_lora(tmp_path_factory, alloc_mode):
+def test_gsm8k_grpo_lora(tmp_path_factory, rollout_backend, actor_backend):
     experiments_path = tmp_path_factory.mktemp("experiments")
     name_resolve_path = tmp_path_factory.mktemp("name_resolve")
     model_path = get_model_path(
@@ -429,7 +435,8 @@ def test_gsm8k_grpo_lora(tmp_path_factory, alloc_mode):
         run_example,
         example_file,
         config_name,
-        f"allocation_mode={alloc_mode}",
+        f"rollout.backend={rollout_backend}",
+        f"actor.backend={actor_backend}",
         "gconfig.n_samples=2",
         "gconfig.max_new_tokens=256",
         "actor.mb_spec.max_tokens_per_mb=1024",
@@ -464,7 +471,8 @@ def test_multi_turn_math(tmp_path_factory):
         run_example,
         example_file,
         config_name,
-        "allocation_mode=sglang:d1+fsdp:d1",
+        "rollout.backend=sglang:d1",
+        "actor.backend=fsdp:d1",
         "gconfig.n_samples=1",
         "gconfig.max_new_tokens=256",
         "actor.mb_spec.max_tokens_per_mb=1024",
@@ -496,7 +504,7 @@ def test_hhrlhf_rw(tmp_path_factory):
         run_example,
         example_file,
         config_name,
-        "allocation_mode=d1",
+        "actor.backend=d1",
         "actor.mb_spec.max_tokens_per_mb=1024",
         "train_dataset.batch_size=16",
         "valid_dataset.batch_size=16",
@@ -527,7 +535,8 @@ def test_tir_grpo(tmp_path_factory):
         run_example,
         example_file,
         config_name,
-        "allocation_mode=sglang:d1+fsdp:d1",
+        "rollout.backend=sglang:d1",
+        "actor.backend=fsdp:d1",
         "gconfig.n_samples=2",
         "gconfig.max_new_tokens=64",
         "actor.mb_spec.max_tokens_per_mb=1024",
@@ -583,7 +592,7 @@ def test_search_agent_deepresearch(tmp_path_factory):
                 example_file,
                 "--config",
                 config_name,
-                "allocation_mode=sglang:d1",
+                "rollout.backend=sglang:d1",
                 f"cluster.fileroot={str(experiments_path)}",
                 f"cluster.name_resolve.nfs_record_root={str(name_resolve_path)}",
                 f"experiment_name={llm_judge_exp_name}",
@@ -604,7 +613,8 @@ def test_search_agent_deepresearch(tmp_path_factory):
             run_example,
             example_file,
             config_name,
-            "allocation_mode=sglang:d1+megatron:d1",
+            "rollout.backend=sglang:d1",
+            "actor.backend=megatron:d1",
             "gconfig.n_samples=2",
             "gconfig.max_new_tokens=128",
             "actor.mb_spec.max_tokens_per_mb=2048",
@@ -639,7 +649,8 @@ def test_openai_agents(tmp_path_factory):
         run_example,
         example_file,
         config_name,
-        "allocation_mode=sglang:d1+fsdp:d1",
+        "rollout.backend=sglang:d1",
+        "actor.backend=fsdp:d1",
         "gconfig.n_samples=1",
         "gconfig.max_tokens=256",
         "actor.mb_spec.max_tokens_per_mb=4096",
@@ -675,7 +686,8 @@ def test_camel(tmp_path_factory):
         run_example,
         example_file,
         config_name,
-        "allocation_mode=sglang:d1+fsdp:d1",
+        "rollout.backend=sglang:d1",
+        "actor.backend=fsdp:d1",
         "gconfig.n_samples=2",
         "gconfig.max_new_tokens=256",
         "actor.mb_spec.max_tokens_per_mb=4096",
@@ -706,7 +718,8 @@ def test_openai_proxy(tmp_path_factory):
         run_example,
         example_file,
         config_name,
-        "allocation_mode=sglang:d1+fsdp:d1",
+        "rollout.backend=sglang:d1",
+        "actor.backend=fsdp:d1",
         "gconfig.n_samples=2",
         "gconfig.max_new_tokens=16",
         "gconfig.max_tokens=512",
@@ -825,7 +838,8 @@ def test_tau2(tmp_path_factory):
             run_example,
             example_file,
             config_name,
-            "allocation_mode=sglang:d1+megatron:d1",
+            "rollout.backend=sglang:d1",
+            "actor.backend=megatron:d1",
             "gconfig.n_samples=2",
             "gconfig.max_new_tokens=1024",
             "gconfig.max_tokens=8192",
@@ -915,7 +929,8 @@ def test_openclaw_online_rl(tmp_path_factory):
         "examples/openclaw/train.py",
         "--config",
         "examples/openclaw/config.yaml",
-        "allocation_mode=sglang:d1+fsdp:d1",
+        "rollout.backend=sglang:d1",
+        "actor.backend=fsdp:d1",
         "gconfig.n_samples=1",
         "gconfig.max_new_tokens=128",
         "actor.mb_spec.max_tokens_per_mb=2048",

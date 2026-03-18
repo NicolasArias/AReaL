@@ -3,6 +3,7 @@ import pathlib
 import re
 import sys
 import time
+import warnings
 from collections.abc import Callable
 from functools import partial
 
@@ -13,7 +14,7 @@ from ray.util.placement_group import PlacementGroup
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 import areal.utils.logging as logging
-from areal.api import AllocationMode, AllocationType
+from areal.api.alloc_mode import AllocationType, _AllocationMode
 from areal.api.cli_args import (
     ClusterSpecConfig,
     InferenceEngineConfig,
@@ -372,7 +373,13 @@ def ray_main(config, run_id: int = 0):
         launcher = RAY_LAUNCHER
 
     allocation_mode = config.allocation_mode
-    allocation_mode = AllocationMode.from_str(allocation_mode)
+    allocation_mode = _AllocationMode.from_str(allocation_mode)
+    warnings.warn(
+        "SPMD launchers use legacy AllocationMode parsing which will be removed in a future version. "
+        "Migrate to single-controller mode (scheduler.type=local) with per-engine 'backend' configs.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
 
     actor_spec = get_scheduling_spec(config.actor)
 

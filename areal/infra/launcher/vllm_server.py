@@ -5,12 +5,13 @@ import sys
 import time
 import traceback
 import uuid
+import warnings
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 
 import requests
 
-from areal.api import AllocationMode
+from areal.api.alloc_mode import _AllocationMode
 from areal.api.cli_args import (
     ClusterSpecConfig,
     InferenceEngineConfig,
@@ -88,7 +89,7 @@ class vLLMServerWrapper:
         experiment_name: str,
         trial_name: str,
         vllm_config: vLLMConfig,
-        allocation_mode: AllocationMode,
+        allocation_mode: _AllocationMode,
         n_gpus_per_node: int,
         cpu_per_gpu: int | None = None,
     ):
@@ -257,7 +258,13 @@ def launch_vllm_server(argv):
     name_resolve.reconfigure(config.cluster.name_resolve)
 
     allocation_mode = config.allocation_mode
-    allocation_mode = AllocationMode.from_str(allocation_mode)
+    allocation_mode = _AllocationMode.from_str(allocation_mode)
+    warnings.warn(
+        "SPMD launchers use legacy AllocationMode parsing which will be removed in a future version. "
+        "Migrate to single-controller mode (scheduler.type=local) with per-engine 'backend' configs.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     assert allocation_mode.gen_backend == "vllm"
 
     # Get CPU per GPU from rollout scheduling spec

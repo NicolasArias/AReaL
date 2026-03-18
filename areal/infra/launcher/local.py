@@ -5,11 +5,12 @@ import signal as signal_module
 import subprocess
 import sys
 import time
+import warnings
 from collections import defaultdict
 
 import psutil
 
-from areal.api import AllocationMode, AllocationType
+from areal.api.alloc_mode import AllocationType, _AllocationMode
 from areal.api.cli_args import (
     ClusterSpecConfig,
     InferenceEngineConfig,
@@ -279,7 +280,13 @@ def local_main(config, run_id: int = 0):
             experiment_name=config.experiment_name, trial_name=config.trial_name
         )
     )
-    alloc_mode = AllocationMode.from_str(config.allocation_mode)
+    alloc_mode = _AllocationMode.from_str(config.allocation_mode)
+    warnings.warn(
+        "SPMD launchers use legacy AllocationMode parsing which will be removed in a future version. "
+        "Migrate to single-controller mode (scheduler.type=local) with per-engine 'backend' configs.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
 
     logger.info(
         f"LocalLauncher: experiment_name={config.experiment_name}, "

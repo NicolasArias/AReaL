@@ -109,6 +109,7 @@ def create_archon_engine(
 ) -> ArchonEngine:
     """Create and initialize ArchonEngine with PP enabled."""
     engine_config = TrainEngineConfig(
+        backend="fsdp:d1",
         experiment_name="test-archon-pp",
         trial_name="test0",
         path=model_path,

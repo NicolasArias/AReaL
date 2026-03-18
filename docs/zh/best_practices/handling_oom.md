@@ -8,7 +8,8 @@ OOM 错误在大规模 RL 训练中很常见。本指南介绍如何在 AReaL �
 
 ### 核心参数
 
-- **各引擎的 `backend` 字段（如 `actor.backend`、`rollout.backend`）**：推理和训练如何在 GPU 之间分配。对于大模型，张量并行通常比数据并行每个 GPU 使用更少的内存。
+- **各引擎的 `backend` 字段（如 `actor.backend`、`rollout.backend`）**：推理和训练如何在 GPU
+  之间分配。对于大模型，张量并行通常比数据并行每个 GPU 使用更少的内存。
 
 - **`train_dataset.max_length`**：最大提示长度。更长的提示需要更多内存。
 

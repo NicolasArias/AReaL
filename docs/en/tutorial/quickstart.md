@@ -110,7 +110,8 @@ Additional references:
   to set up a ray cluster.
 
 > **Important Note**: Ensure the total GPUs across `rollout.backend` and `actor.backend`
-> matches your cluster configuration (`#GPUs == cluster.n_nodes * cluster.n_gpus_per_node`)
+> matches your cluster configuration
+> (`#GPUs == cluster.n_nodes * cluster.n_gpus_per_node`)
 
 <!--
 > **Notes**: Before launching distributed experiments, please check if your per-engine `backend` fields match your cluster configuration. Make sure the total GPUs allocated by `rollout.backend` and `actor.backend` equals `cluster.n_nodes * cluster.n_gpus_per_node`.

@@ -38,7 +38,8 @@ ref:
 
 当 `critic.backend` 或 `ref.backend` 为空时，会自动继承 `actor.backend` 的值。
 
-> **注意：** 顶层的 `allocation_mode` 配置字段已弃用，仅为旧版 SPMD 启动器（local/ray/slurm）保留向后兼容性。此字段被单控制器调度器忽略。请使用上述各引擎的 `backend` 字段。
+> **注意：** 顶层的 `allocation_mode` 配置字段已弃用，仅为旧版 SPMD
+> 启动器（local/ray/slurm）保留向后兼容性。此字段被单控制器调度器忽略。请使用上述各引擎的 `backend` 字段。
 
 ### Backend 字符串语法
 

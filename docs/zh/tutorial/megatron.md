@@ -5,8 +5,7 @@
 
 ## 启用 Megatron 后端
 
-从 FSDP 切换到 Megatron 只需要更改一行：将 `actor.backend` 字段从 `fsdp:d4` 改为
-`megatron:d4`。
+从 FSDP 切换到 Megatron 只需要更改一行：将 `actor.backend` 字段从 `fsdp:d4` 改为 `megatron:d4`。
 
 有关分配模式语法、并行维度 和 GPU 计算的完整指南，请参阅[分配模式参考](../reference/alloc_mode.md)。
 
